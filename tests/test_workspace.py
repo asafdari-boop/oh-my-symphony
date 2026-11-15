@@ -2486,3 +2486,35 @@ async def test_commit_workspace_on_done_noops_with_excluded_only_wip_and_staged_
     assert _git(repo, "ls-tree", "-r", "--name-only", "HEAD", "nested/vendor/secret.txt").stdout == ""
     assert _git(repo, "ls-files", "--", "nested/vendor/secret.txt").stdout == ""
     assert secret.read_bytes() == b"excluded-only nested wip\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _HAS_GIT or os.name == "nt", reason="uses POSIX Git worktrees")
+async def test_linear_pilot_provisions_and_reuses_target_worktree(tmp_path, monkeypatch):
+    target = tmp_path / "target repo"
+    target.mkdir()
+    _git(target, "init", "-q", "-b", "main")
+    _git(target, "commit", "--allow-empty", "-qm", "seed")
+    monkeypatch.setenv("LINEAR_PILOT_REPO_DIR", str(target))
+    monkeypatch.setenv("LINEAR_PILOT_BASE_BRANCH", "main")
+    example = Path(__file__).parents[1] / "WORKFLOW.linear-pilot.example.md"
+    cfg = build_service_config(load_workflow(example))
+    root = tmp_path / "workspaces"
+
+    workspace = await WorkspaceManager(root, cfg.hooks).create_or_reuse("PILOT-1")
+    assert _git(workspace.path, "branch", "--show-current").stdout.strip() == "symphony/PILOT-1"
+    assert _git(workspace.path, "rev-parse", "HEAD").stdout == _git(target, "rev-parse", "HEAD").stdout
+    _git(workspace.path, "commit", "--allow-empty", "-qm", "in progress")
+    progress = _git(workspace.path, "rev-parse", "HEAD").stdout
+
+    restarted = WorkspaceManager(root, cfg.hooks)
+    resumed = await restarted.create_or_reuse("PILOT-1")
+    await restarted.before_run(resumed.path)
+    assert _git(resumed.path, "rev-parse", "HEAD").stdout == progress
+
+    unrelated = tmp_path / "other repo"
+    unrelated.mkdir()
+    _git(unrelated, "init", "-q", "-b", "main")
+    monkeypatch.setenv("LINEAR_PILOT_REPO_DIR", str(unrelated))
+    with pytest.raises(SymphonyError):
+        await restarted.before_run(resumed.path)
