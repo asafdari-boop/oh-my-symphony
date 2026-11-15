@@ -4031,3 +4031,29 @@ async def test_codex_replays_live_usage_without_counting_cached_input_twice(tmp_
             "input_tokens": 31080, "output_tokens": 269, "total_tokens": 31349,
             "cache_input_tokens": 12928,
         }
+
+
+def test_codex_worker_does_not_inherit_linear_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "default-secret")
+    monkeypatch.setenv("CUSTOM_TRACKER_KEY", "configured-secret")
+    monkeypatch.setenv("CODEX_TEST_SETTING", "ordinary-value")
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cfg = replace(cfg, tracker=replace(cfg.tracker, kind="linear", api_key="configured-secret"))
+    backend = CodexAppServerBackend(
+        BackendInit(
+            cfg=cfg,
+            cwd=tmp_path,
+            workspace_root=tmp_path,
+            on_event=_noop_event,
+            env={"DISPATCH_CREDENTIAL_ALIAS": "configured-secret", "DISPATCH_ID": "t1"},
+        )
+    )
+
+    _, env = backend._prepare_command_and_env()
+
+    assert {"LINEAR_API_KEY", "CUSTOM_TRACKER_KEY", "DISPATCH_CREDENTIAL_ALIAS"}.isdisjoint(
+        env.keys()
+    )
+    assert env["CODEX_TEST_SETTING"] == "ordinary-value"
+    assert env["DISPATCH_ID"] == "t1"
+    assert os.environ["CUSTOM_TRACKER_KEY"] == "configured-secret"

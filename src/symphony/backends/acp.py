@@ -111,7 +111,7 @@ class AcpBackend(BaseAgentBackend):
         self._profile = profile
         self._agent_name = profile.name
         self._cwd = init.cwd
-        self._extra_env = dict(init.env)
+        self._worker_environment = init.worker_environment
         self._on_event = init.on_event
         self._on_process_started = init.on_process_started
         self._on_process_identified = init.on_process_identified
@@ -168,7 +168,7 @@ class AcpBackend(BaseAgentBackend):
         if self._cleanup_unconfirmed:
             raise ResponseError("prior backend process cleanup is not confirmed")
         command = self._profile.command
-        env = {**os.environ, **git_roots_env(self._cwd), **self._extra_env}
+        env = self._worker_environment(git_roots_env(self._cwd))
         self._stream_corrupt = None
         try:
             async with self._process_launch_guard() as publish_started:

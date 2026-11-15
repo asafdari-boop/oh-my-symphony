@@ -28,13 +28,14 @@ backend-specific protocol details.
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncContextManager, Awaitable, Callable, Protocol, cast, runtime_checkable
 
 from ..errors import ConfigValidationError
-from ..workflow import ServiceConfig, selectable_agent_kinds
+from ..workflow import LINEAR_API_KEY_ENV, ServiceConfig, selectable_agent_kinds
 
 
 # Normalized event vocabulary — every backend emits these strings only.
@@ -149,6 +150,16 @@ class BackendInit:
     env: dict[str, str] = field(default_factory=dict)
     process_launch_guard: ProcessLaunchGuard = noop_process_launch_guard
     _require_durable_process: bool = False
+
+    def worker_environment(self, grants: dict[str, str]) -> dict[str, str]:
+        """Build the worker environment without the controller's Linear key."""
+        env = {**os.environ, **grants, **self.env}
+        if self.cfg.tracker.kind == "linear":
+            env.pop(LINEAR_API_KEY_ENV, None)
+            api_key = self.cfg.tracker.api_key
+            if api_key:
+                env = {name: value for name, value in env.items() if value != api_key}
+        return env
 
 
 @runtime_checkable

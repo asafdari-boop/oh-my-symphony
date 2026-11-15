@@ -41,4 +41,6 @@ merge, publish, or mark the project complete.
 
 This example is for configuration validation with a fixture credential.
 Before running live, configure the target repository worktree hook, the
-approved Linear project and exact state names, and credential isolation.
+approved Linear project and exact state names, and a trusted execution host.
+The runner strips the Linear key from worker subprocess environments. Run
+only trusted lifecycle hooks, which execute on the controller host.

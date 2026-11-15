@@ -268,7 +268,7 @@ class CodexAppServerBackend(BaseAgentBackend):
         self._codex = codex
         self._cwd = init.cwd
         self._workspace_root = init.workspace_root
-        self._extra_env = dict(init.env)
+        self._worker_environment = init.worker_environment
         self._on_event = init.on_event
         self._on_process_started = init.on_process_started
         self._on_process_identified = init.on_process_identified
@@ -389,11 +389,7 @@ class CodexAppServerBackend(BaseAgentBackend):
 
         No-op when sandbox is not workspace-write or no symlinks exist.
         """
-        env = os.environ.copy()
-        # Backend-neutral grant, exported by every Symphony backend so any
-        # wrapper script can widen its own sandbox the same way.
-        env.update(git_roots_env(self._cwd, self._workspace_root))
-        env.update(self._extra_env)
+        env = self._worker_environment(git_roots_env(self._cwd, self._workspace_root))
         command = self._codex.command
         if not _sandbox_uses_workspace_write(self._thread_sandbox, self._sandbox_policy):
             self._writable_roots = []
