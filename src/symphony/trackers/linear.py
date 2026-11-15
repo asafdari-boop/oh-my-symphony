@@ -148,6 +148,12 @@ query WorkflowStates($teamId: ID!) {
 }
 """
 
+_COMMENT_CREATE_MUTATION = """
+mutation CommentCreate($input: CommentCreateInput!) {
+  commentCreate(input: $input) { success }
+}
+"""
+
 _ISSUE_UPDATE_MUTATION = """
 mutation IssueUpdate($id: String!, $stateId: String!) {
   issueUpdate(id: $id, input: { stateId: $stateId }) {
@@ -330,16 +336,21 @@ class LinearClient:
             )
 
     def append_note(self, issue: Issue, heading: str, body: str) -> None:
-        """Linear comment append is not wired yet; skip and log.
-
-        The orchestrator treats note-append as best-effort, so skipping is
-        safe — state transitions still carry the workflow forward.
-        """
-        log.debug(
-            "linear_append_note_skipped",
-            issue=issue.identifier or issue.id,
-            heading=heading,
+        """Post the orchestrator's note as a Markdown comment on the issue."""
+        if not issue.id:
+            raise LinearUnknownPayload("issue.id is empty; cannot post comment")
+        payload = self._post(
+            {
+                "query": _COMMENT_CREATE_MUTATION,
+                "variables": {"input": {"issueId": issue.id, "body": f"## {heading}\n\n{body}"}},
+            },
+            # A response can be lost after Linear stores the comment.
+            retry=False,
         )
+        data = payload.get("data")
+        result = data.get("commentCreate") if isinstance(data, dict) else None
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise LinearUnknownPayload("commentCreate did not report success")
 
     def _team_id_for_issue(self, issue_id: str) -> str:
         cached = self._issue_team_cache.get(issue_id)
@@ -428,11 +439,12 @@ class LinearClient:
             after = cursor
         return out
 
-    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+    def _post(self, body: dict[str, Any], *, retry: bool = True) -> dict[str, Any]:
+        def send() -> httpx.Response:
+            return self._client.post(self._tracker.endpoint, json=body)
+
         try:
-            response = send_with_retry(
-                lambda: self._client.post(self._tracker.endpoint, json=body)
-            )
+            response = send_with_retry(send) if retry else send()
         except httpx.HTTPError as exc:
             raise LinearApiRequestError("transport failure", error=str(exc)) from exc
         if response.status_code != 200:

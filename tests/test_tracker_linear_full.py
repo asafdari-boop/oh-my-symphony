@@ -852,3 +852,39 @@ def test_execute_raw_defaults_variables_to_empty_dict() -> None:
     client = _client(handler)
     client.execute_raw("query { __schema { types { name } } }")
     assert captured["body"]["variables"] == {}
+
+
+def test_append_note_posts_markdown_to_issue() -> None:
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        assert "commentCreate(input:" in payload["query"]
+        return httpx.Response(200, json={"data": {"commentCreate": {"success": True}}})
+
+    _client(handler).append_note(_issue(), "Verify Failure", "Checks failed on abc123.")
+    assert [call["variables"]["input"] for call in calls] == [
+        {"issueId": "u-1", "body": "## Verify Failure\n\nChecks failed on abc123."}
+    ]
+
+
+def test_append_note_rejects_unsuccessful_mutation() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"commentCreate": {"success": False}}})
+
+    with pytest.raises(LinearUnknownPayload, match="commentCreate"):
+        _client(handler).append_note(_issue(), "Verification", "Result")
+
+
+def test_append_note_does_not_retry_an_ambiguous_write() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503)
+
+    with pytest.raises(LinearApiStatusError):
+        _client(handler).append_note(_issue(), "Verification", "Result")
+    assert calls == 1
