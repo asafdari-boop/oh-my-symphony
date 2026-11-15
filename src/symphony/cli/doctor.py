@@ -52,6 +52,7 @@ from ..orchestrator.release_seam import (
     has_release_success_terminal,
 )
 from ..trackers.file import FileBoardTracker
+from ..trackers.linear import LinearClient
 from ..utils.git_sandbox import resolve_git_common_dir, writable_git_roots
 from ..service import ProcessRunningPredicate, port_owner_hint
 from ..workflow import (
@@ -947,6 +948,38 @@ def check_tracker(cfg: ServiceConfig) -> CheckResult:
     return CheckResult(f"tracker.kind={tracker.kind}", "warn", "unknown tracker kind")
 
 
+def check_linear_connection(cfg: ServiceConfig) -> CheckResult:
+    """Verify the project and candidate query without claiming or writing issues."""
+    name = "tracker.linear_connection"
+    tracker = cfg.tracker
+    if tracker.kind != "linear":
+        return CheckResult(name, "fail", "--check-linear needs tracker.kind: linear")
+    if not tracker.api_key or not tracker.project_slug:
+        return CheckResult(name, "fail", "Set the Linear API key and project slug first")
+
+    client = LinearClient(tracker)
+    try:
+        response = client.execute_raw(
+            """
+            query PilotProject($slug: String!) {
+              projects(first: 2, filter: {slugId: {eq: $slug}}) { nodes { id } }
+            }
+            """,
+            {"slug": tracker.project_slug},
+        )
+        data = response.get("data")
+        projects = data.get("projects") if isinstance(data, dict) else None
+        nodes = projects.get("nodes") if isinstance(projects, dict) else None
+        if not isinstance(nodes, list) or len(nodes) != 1:
+            return CheckResult(name, "fail", "Configured Linear project is missing or ambiguous")
+        count = len(client.fetch_candidate_issues())
+    except SymphonyError as exc:
+        return CheckResult(name, "fail", f"Linear read failed ({type(exc).__name__})")
+    finally:
+        client.close()
+    return CheckResult(name, "pass", f"Project is readable; {count} matching issue(s)")
+
+
 def check_shell() -> CheckResult:
     """Hooks and backend subprocesses spawn via ``bash -lc``. On Windows we
     must avoid the WSL launcher (``C:\\Windows\\System32\\bash.exe``) — see
@@ -1367,6 +1400,11 @@ def main(argv: list[str]) -> int:
         help="run verification commands once in a temporary detached HEAD worktree",
     )
     parser.add_argument(
+        "--check-linear",
+        action="store_true",
+        help="read the configured Linear project and matching issues without starting work",
+    )
+    parser.add_argument(
         "--no-color",
         action="store_true",
         help="disable ANSI color even when stdout is a tty",
@@ -1391,5 +1429,7 @@ def main(argv: list[str]) -> int:
         results = run_checks(cfg, host=args.host, run_verification=True)
     else:
         results = run_checks(cfg, host=args.host)
+    if args.check_linear:
+        results.append(check_linear_connection(cfg))
     print(format_results(results, color=color))
     return _exit_code(results)

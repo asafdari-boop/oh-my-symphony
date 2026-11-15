@@ -1745,3 +1745,36 @@ def test_app_release_doctor_leaves_unselected_remote_tracker_quiet(
 
     assert result.status == "pass"
     assert "not inspected" in result.message
+
+
+@pytest.mark.parametrize("project_exists", [True, False])
+def test_linear_connectivity_distinguishes_empty_project_from_wrong_slug(
+    tmp_path, monkeypatch, project_exists
+):
+    from symphony.cli import doctor
+
+    cfg = _build_cfg(
+        tmp_path,
+        "tracker: {kind: linear, api_key: fixture-key, project_slug: pilot-project}\n",
+    )
+
+    class Client:
+        def __init__(self, tracker):
+            assert tracker.project_slug == "pilot-project"
+
+        def execute_raw(self, query, variables):
+            assert query.lstrip().startswith("query ")
+            assert variables == {"slug": "pilot-project"}
+            return {"data": {"projects": {"nodes": [{"id": "p1"}] if project_exists else []}}}
+
+        def fetch_candidate_issues(self):
+            assert project_exists
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(doctor, "LinearClient", Client)
+    result = doctor.check_linear_connection(cfg)
+    assert result.status == ("pass" if project_exists else "fail")
+    assert ("0 matching" in result.message) == project_exists

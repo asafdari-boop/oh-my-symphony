@@ -3,8 +3,8 @@ tracker:
   kind: linear
   project_slug: $LINEAR_PROJECT_SLUG
   api_key: $LINEAR_API_KEY
-  active_states: [Ready, "In Progress"]
-  terminal_states: ["Human Review", Done, Blocked, Canceled, Cancelled]
+  active_states: [Todo, "In Progress"]
+  terminal_states: [Done, Canceled, Duplicate]
   archive_after_days: 0
 polling:
   interval_ms: 30000
@@ -74,5 +74,9 @@ the target repo. The hook branches from its local `main` by default. Set
 before starting a pilot. Existing ticket branches keep their progress.
 For a live run, configure the approved Linear project, credentials and
 exact state names, and use a trusted execution host.
+New pilot issues belong in Backlog until an operator moves them to Todo.
+Run `symphony doctor WORKFLOW.linear-pilot.example.md --check-linear`
+before starting the service. This verifies that the controller can read
+the selected project and list matching tickets without changing the board.
 The runner strips the Linear key from worker subprocess environments. Run
 only trusted lifecycle hooks, which execute on the controller host.
