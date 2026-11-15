@@ -12876,3 +12876,81 @@ def test_git_index_failure_preserves_factory_product_and_registered_worktree(
     assert workspace.as_posix().lower() in worktrees.lower()
     assert not (host / "product_task_1.py").exists()
     assert len(tracker.scan_all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_linear_pilot_poll_dispatches_only_unblocked_todo(tmp_path, monkeypatch):
+    import httpx
+
+    from symphony.trackers.linear import LinearClient
+
+    example = Path(__file__).parents[1] / "WORKFLOW.linear-pilot.example.md"
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text(example.read_text())
+    monkeypatch.setenv("LINEAR_PROJECT_SLUG", "pilot-project")
+    monkeypatch.setenv("LINEAR_API_KEY", "fixture-token")
+    blocker_state = "In Progress"
+    dispatched = []
+    candidate_polls = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        variables = payload["variables"]
+        assert variables["projectSlug"] == "pilot-project"
+        assert request.headers["authorization"] == "fixture-token"
+        if "query ByState" in payload["query"]:
+            return httpx.Response(200, json={"data": {"issues": {
+                "nodes": [], "pageInfo": {"hasNextPage": False},
+            }}})
+        assert "query Candidates" in payload["query"]
+        assert variables["states"] == ["Todo", "In Progress"]
+        candidate_polls.append(blocker_state)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "issues": {
+                        "nodes": [{
+                            "id": "consumer",
+                            "identifier": "PILOT-1",
+                            "title": "Consume an upstream change",
+                            "state": {"name": "Todo"},
+                            "inverseRelations": {
+                                "nodes": [{
+                                    "type": "blocks",
+                                    "issue": {
+                                        "id": "producer",
+                                        "identifier": "PILOT-2",
+                                        "state": {"name": blocker_state},
+                                    },
+                                }],
+                                "pageInfo": {"hasNextPage": False},
+                            },
+                        }],
+                        "pageInfo": {"hasNextPage": False},
+                    },
+                },
+            },
+        )
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), headers={"Authorization": "fixture-token"}
+    ) as client:
+        monkeypatch.setattr(
+            core_module, "build_tracker_client",
+            lambda cfg: LinearClient(cfg.tracker, http_client=client),
+        )
+        orch = Orchestrator(WorkflowState(workflow))
+        monkeypatch.setattr(
+            orch, "_dispatch",
+            lambda issue, _cfg, **_kwargs: dispatched.append(issue.identifier) or True,
+        )
+
+        await orch._on_tick()
+        assert candidate_polls == ["In Progress"]
+        assert dispatched == []
+
+        blocker_state = "Done"
+        await orch._on_tick()
+        assert candidate_polls == ["In Progress", "Done"]
+        assert dispatched == ["PILOT-1"]
